@@ -1,0 +1,102 @@
+# render.yaml
+# Deploy entire RideApp stack to Render with one click.
+# Docs: https://render.com/docs/blueprint-spec
+
+services:
+
+  # ── Backend API + Socket.io ──────────────────────────────────────────────
+  - type: web
+    name: rideapp-backend
+    runtime: node
+    region: ohio           # or oregon, frankfurt, singapore
+    plan: starter          # $7/mo — upgrade to standard for production
+    rootDir: backend
+    buildCommand: npm install
+    startCommand: node src/index.js
+    healthCheckPath: /api/health
+    autoDeploy: true
+
+    envVars:
+      - key: NODE_ENV
+        value: production
+
+      - key: PORT
+        value: 10000        # Render assigns this automatically
+
+      - key: MONGODB_URI
+        sync: false         # Set manually in Render dashboard (Atlas URI)
+
+      - key: JWT_SECRET
+        generateValue: true # Render generates a random value
+
+      - key: JWT_EXPIRE
+        value: 15m
+
+      - key: JWT_REFRESH_SECRET
+        generateValue: true
+
+      - key: JWT_REFRESH_EXPIRE
+        value: 7d
+
+      - key: GOOGLE_MAPS_API_KEY
+        sync: false         # Set manually in Render dashboard
+
+      - key: FRONTEND_URL
+        fromService:        # Auto-populated from frontend service URL
+          type: web
+          name: rideapp-frontend
+          property: host
+          envVarKey: FRONTEND_URL
+
+      - key: ADMIN_EMAIL
+        sync: false         # Set manually
+
+      - key: ADMIN_PASSWORD
+        sync: false         # Set manually — never commit this
+
+      - key: RATE_LIMIT_MAX
+        value: 150
+
+    scaling:
+      minInstances: 1
+      maxInstances: 3       # Auto-scale up to 3 on traffic spikes
+
+  # ── Frontend React (Static Site) ─────────────────────────────────────────
+  - type: web
+    name: rideapp-frontend
+    runtime: static
+    region: ohio
+    plan: starter
+    rootDir: frontend
+    buildCommand: npm install && REACT_APP_API_URL=https://rideapp-backend.onrender.com/api REACT_APP_SOCKET_URL=https://rideapp-backend.onrender.com npm run build
+    staticPublishPath: build
+    pullRequestPreviewsEnabled: true
+    autoDeploy: true
+
+    headers:
+      # Security headers for static site
+      - path: /*
+        name: X-Frame-Options
+        value: DENY
+      - path: /*
+        name: X-Content-Type-Options
+        value: nosniff
+      - path: /*
+        name: Referrer-Policy
+        value: strict-origin-when-cross-origin
+      - path: /sw.js
+        name: Cache-Control
+        value: no-cache     # Service worker must never be cached by CDN
+      - path: /static/*
+        name: Cache-Control
+        value: public, max-age=31536000, immutable
+
+    routes:
+      # SPA fallback — all paths serve index.html
+      - type: rewrite
+        source: /*
+        destination: /index.html
+
+    envVars:
+      - key: REACT_APP_GOOGLE_MAPS_KEY
+        sync: false         # Set manually in Render dashboard
