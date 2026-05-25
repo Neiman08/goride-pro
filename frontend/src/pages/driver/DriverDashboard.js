@@ -253,6 +253,7 @@ function DriverHome() {
         socket.off('ride:cancelled');
       }
     };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [registerRideListeners, stopGPS]);
 
   // ── Go online / offline ───────────────────────────────────────────────────
