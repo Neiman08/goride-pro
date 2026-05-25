@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { Routes, Route } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext';
 import { ridesAPI, usersAPI } from '../../services/api';
@@ -7,52 +7,253 @@ import AppShell from '../../components/layout/AppShell';
 import { Button, Card, Badge, Stat, StatusDot, Alert, Spinner } from '../../components/ui/UI';
 import './DriverDashboard.css';
 
-// ── Dashboard home ─────────────────────────────────────────────────────────
+const GMAPS_KEY = process.env.REACT_APP_GOOGLE_MAPS_API_KEY;
+
+// ── Load Google Maps once ──────────────────────────────────────────────────
+function loadGoogleMaps() {
+  return new Promise((resolve, reject) => {
+    if (window.google?.maps) return resolve(window.google.maps);
+    if (!GMAPS_KEY) return reject(new Error('Missing Google Maps API key'));
+    const existing = document.getElementById('google-maps-script');
+    if (existing) {
+      existing.addEventListener('load', () => resolve(window.google.maps));
+      return;
+    }
+    const script = document.createElement('script');
+    script.id = 'google-maps-script';
+    script.src = `https://maps.googleapis.com/maps/api/js?key=${GMAPS_KEY}&libraries=places`;
+    script.async = true;
+    script.onload = () => resolve(window.google.maps);
+    script.onerror = reject;
+    document.body.appendChild(script);
+  });
+}
+
+// ── Embedded map for active ride ───────────────────────────────────────────
+function RideMapEmbed({ origin, destination, driverLocation }) {
+  const mapRef = useRef(null);
+  const mapInstance = useRef(null);
+  const directionsRenderer = useRef(null);
+  const driverMarker = useRef(null);
+
+  useEffect(() => {
+    if (!origin || !destination) return;
+    let mounted = true;
+
+    loadGoogleMaps().then((maps) => {
+      if (!mounted || !mapRef.current) return;
+
+      // Init map centered on origin
+      mapInstance.current = new maps.Map(mapRef.current, {
+        center: { lat: origin.lat, lng: origin.lng },
+        zoom: 13,
+        disableDefaultUI: true,
+        zoomControl: true,
+        styles: [
+          { elementType: 'geometry', stylers: [{ color: '#111827' }] },
+          { elementType: 'labels.text.fill', stylers: [{ color: '#f9fafb' }] },
+          { elementType: 'labels.text.stroke', stylers: [{ color: '#111827' }] },
+          { featureType: 'road', elementType: 'geometry', stylers: [{ color: '#374151' }] },
+          { featureType: 'water', elementType: 'geometry', stylers: [{ color: '#0f172a' }] },
+          { featureType: 'poi', stylers: [{ visibility: 'off' }] },
+        ],
+      });
+
+      directionsRenderer.current = new maps.DirectionsRenderer({
+        map: mapInstance.current,
+        suppressMarkers: false,
+        polylineOptions: { strokeColor: '#facc15', strokeWeight: 5 },
+      });
+
+      // Draw route
+      const svc = new maps.DirectionsService();
+      svc.route({
+        origin: new maps.LatLng(origin.lat, origin.lng),
+        destination: new maps.LatLng(destination.lat, destination.lng),
+        travelMode: maps.TravelMode.DRIVING,
+      }, (result, status) => {
+        if (status === 'OK') directionsRenderer.current.setDirections(result);
+      });
+
+      // Driver marker (yellow car)
+      if (driverLocation) {
+        driverMarker.current = new maps.Marker({
+          position: driverLocation,
+          map: mapInstance.current,
+          icon: {
+            path: maps.SymbolPath.FORWARD_CLOSED_ARROW,
+            scale: 6,
+            fillColor: '#facc15',
+            fillOpacity: 1,
+            strokeColor: '#fff',
+            strokeWeight: 1.5,
+          },
+          title: 'You',
+        });
+      }
+    }).catch(console.error);
+
+    return () => { mounted = false; };
+  }, [origin, destination]);
+
+  // Update driver marker position live
+  useEffect(() => {
+    if (!driverLocation || !mapInstance.current || !window.google) return;
+    if (driverMarker.current) {
+      driverMarker.current.setPosition(driverLocation);
+    } else {
+      driverMarker.current = new window.google.maps.Marker({
+        position: driverLocation,
+        map: mapInstance.current,
+        icon: {
+          path: window.google.maps.SymbolPath.FORWARD_CLOSED_ARROW,
+          scale: 6,
+          fillColor: '#facc15',
+          fillOpacity: 1,
+          strokeColor: '#fff',
+          strokeWeight: 1.5,
+        },
+      });
+    }
+    mapInstance.current.panTo(driverLocation);
+  }, [driverLocation]);
+
+  return (
+    <div
+      ref={mapRef}
+      style={{
+        width: '100%',
+        height: 240,
+        borderRadius: 16,
+        overflow: 'hidden',
+        border: '1px solid rgba(255,255,255,0.08)',
+        marginBottom: 16,
+        background: '#111827',
+      }}
+    />
+  );
+}
+
+// ── Driver Home ────────────────────────────────────────────────────────────
 function DriverHome() {
   const { user, updateUser } = useAuth();
-  const [isOnline, setIsOnline]   = useState(user?.isOnline || false);
+  const [isOnline, setIsOnline]     = useState(user?.isOnline || false);
   const [activeRide, setActiveRide] = useState(null);
   const [pendingRides, setPendingRides] = useState([]);
-  const [toast, setToast]         = useState('');
-  const [loading, setLoading]     = useState(true);
+  const [toast, setToast]           = useState('');
+  const [loading, setLoading]       = useState(true);
+  const [driverLocation, setDriverLocation] = useState(null);
+  const watchIdRef = useRef(null);
+  const socketRef  = useRef(null);
 
   const showToast = useCallback((msg) => {
     setToast(msg);
     setTimeout(() => setToast(''), 4000);
   }, []);
 
-  useEffect(() => {
-    ridesAPI.active().then(({ data }) => setActiveRide(data.ride)).finally(() => setLoading(false));
+  // ── GPS watch ────────────────────────────────────────────────────────────
+  const startGPS = useCallback(() => {
+    if (!navigator.geolocation) return;
+    watchIdRef.current = navigator.geolocation.watchPosition(
+      (pos) => {
+        const loc = { lat: pos.coords.latitude, lng: pos.coords.longitude };
+        setDriverLocation(loc);
 
+        // Send to server via socket
+        const socket = getSocket();
+        if (socket?.connected) {
+          socket.emit('driver:location_update', {
+            lat: loc.lat,
+            lng: loc.lng,
+            rideId: null, // updated below in effect
+          });
+        }
+      },
+      (err) => console.warn('GPS error:', err.message),
+      { enableHighAccuracy: true, maximumAge: 5000 }
+    );
+  }, []);
+
+  const stopGPS = useCallback(() => {
+    if (watchIdRef.current !== null) {
+      navigator.geolocation.clearWatch(watchIdRef.current);
+      watchIdRef.current = null;
+    }
+  }, []);
+
+  // ── Socket setup — runs once, re-attaches if socket reconnects ───────────
+  const attachSocketListeners = useCallback(() => {
     const socket = getSocket();
-    if (!socket) return;
+    if (!socket || socketRef.current === socket) return;
+    socketRef.current = socket;
+
+    socket.off('ride:new_request');
+    socket.off('ride:taken');
+    socket.off('ride:cancelled');
 
     socket.on('ride:new_request', (ride) => {
       setPendingRides((p) => [ride, ...p.filter((r) => r._id !== ride._id)]);
       showToast('🔔 New ride request!');
     });
+
     socket.on('ride:taken', ({ rideId }) => {
       setPendingRides((p) => p.filter((r) => r._id !== rideId));
     });
+
     socket.on('ride:cancelled', () => {
       showToast('❌ Passenger cancelled');
       setActiveRide(null);
       setIsOnline(true);
     });
-
-    return () => { socket.off('ride:new_request'); socket.off('ride:taken'); socket.off('ride:cancelled'); };
   }, [showToast]);
 
+  useEffect(() => {
+    // Load active ride
+    ridesAPI.active()
+      .then(({ data }) => setActiveRide(data.ride))
+      .finally(() => setLoading(false));
+
+    // Attach listeners immediately and retry every 2s until socket connects
+    attachSocketListeners();
+    const interval = setInterval(attachSocketListeners, 2000);
+
+    // Start GPS
+    navigator.geolocation.getCurrentPosition(
+      (pos) => setDriverLocation({ lat: pos.coords.latitude, lng: pos.coords.longitude }),
+      () => {}
+    );
+
+    return () => {
+      clearInterval(interval);
+      stopGPS();
+    };
+  }, [attachSocketListeners, stopGPS]);
+
+  // ── Go online / offline ───────────────────────────────────────────────────
   const toggleOnline = async () => {
     const next = !isOnline;
+
+    // Get real GPS position first
+    const pos = await new Promise((resolve) => {
+      navigator.geolocation.getCurrentPosition(
+        (p) => resolve({ lat: p.coords.latitude, lng: p.coords.longitude }),
+        () => resolve(driverLocation || { lat: 41.8781, lng: -87.6298 }) // Chicago fallback
+      );
+    });
+
     await usersAPI.updateAvailability(next);
     setIsOnline(next);
     updateUser({ isOnline: next });
 
     const socket = getSocket();
     if (socket) {
-      if (next) socket.emit('driver:go_online', { lat: 40.7128, lng: -74.006 }); // TODO: real GPS
-      else socket.emit('driver:go_offline');
+      if (next) {
+        socket.emit('driver:go_online', pos);
+        startGPS();
+      } else {
+        socket.emit('driver:go_offline');
+        stopGPS();
+      }
     }
 
     if (next) {
@@ -61,34 +262,69 @@ function DriverHome() {
     } else {
       setPendingRides([]);
     }
+
     showToast(next ? '🟢 You are online' : '🔴 You are offline');
   };
 
+  // ── Ride actions ──────────────────────────────────────────────────────────
   const acceptRide = async (rideId) => {
     try {
       const { data } = await ridesAPI.accept(rideId);
       setActiveRide(data.ride);
       setPendingRides([]);
-      showToast('✅ Ride accepted!');
+      startGPS(); // ensure GPS is running during ride
+      showToast('✅ Ride accepted! Head to pickup.');
     } catch (err) {
       showToast(err.response?.data?.message || 'Could not accept');
+    }
+  };
+
+  // "Arrived" — driver reached pickup point, notifies passenger
+  const arrivedAtPickup = async () => {
+    try {
+      await ridesAPI.arrived(activeRide._id);
+      setActiveRide((r) => ({ ...r, status: 'arrived' }));
+      showToast('📍 Passenger notified you arrived!');
+    } catch {
+      // If endpoint doesn't exist yet, just show status change locally
+      setActiveRide((r) => ({ ...r, status: 'arrived' }));
+      showToast('📍 Marked as arrived');
     }
   };
 
   const startRide = async () => {
     await ridesAPI.start(activeRide._id);
     setActiveRide((r) => ({ ...r, status: 'in_progress' }));
-    showToast('🚗 Ride started');
+    showToast('🚗 Ride started — head to destination');
   };
 
   const completeRide = async () => {
-    const { data } = await ridesAPI.complete(activeRide._id);
-    showToast(`✅ Done! +$${data.commission?.driverPayout}`);
-    setActiveRide(null);
-    setIsOnline(true);
+    try {
+      const { data } = await ridesAPI.complete(activeRide._id);
+      showToast(`✅ Done! You earned $${data.commission?.driverPayout}`);
+      setActiveRide(null);
+      setIsOnline(true);
+    } catch (err) {
+      showToast(err.response?.data?.message || 'Error completing ride');
+    }
   };
 
   if (loading) return <div className="page"><Spinner size={28} /></div>;
+
+  // Map target changes based on ride status:
+  // accepted / arrived → go to origin (pickup)
+  // in_progress → go to destination
+  const mapOrigin = activeRide?.origin?.coordinates
+    ? { lat: activeRide.origin.coordinates.lat, lng: activeRide.origin.coordinates.lng }
+    : null;
+
+  const mapDestination = activeRide?.destination?.coordinates
+    ? { lat: activeRide.destination.coordinates.lat, lng: activeRide.destination.coordinates.lng }
+    : null;
+
+  const mapTarget = activeRide?.status === 'in_progress'
+    ? { origin: mapOrigin, destination: mapDestination }           // show full route
+    : { origin: driverLocation, destination: mapOrigin };          // show route to pickup
 
   return (
     <div className="page">
@@ -96,6 +332,11 @@ function DriverHome() {
 
       <div className="page-header">
         <h1 className="page-title">Driver Dashboard</h1>
+        {driverLocation && (
+          <span style={{ fontSize: 11, color: 'var(--text-3)' }}>
+            📍 GPS active
+          </span>
+        )}
       </div>
 
       {/* Online toggle */}
@@ -107,10 +348,7 @@ function DriverHome() {
             <p className="online-sub">{isOnline ? 'Receiving ride requests' : 'Tap to start earning'}</p>
           </div>
         </div>
-        <Button
-          variant={isOnline ? 'danger' : 'success'}
-          onClick={toggleOnline}
-        >
+        <Button variant={isOnline ? 'danger' : 'success'} onClick={toggleOnline}>
           {isOnline ? 'Go offline' : 'Go online'}
         </Button>
       </Card>
@@ -122,16 +360,23 @@ function DriverHome() {
         <Stat label="Rating"         value={`⭐ ${user?.rating || '5.0'}`} />
       </div>
 
-      {/* Active ride */}
+      {/* ── Active ride ── */}
       {activeRide && (
         <div>
           <p className="section-title">Active ride</p>
           <Card className="active-ride-card">
+
+            {/* Status banner */}
             <div className="active-ride-status">
               <StatusDot status={activeRide.status} />
-              <span>{{ accepted: 'Heading to pickup', in_progress: 'Ride in progress' }[activeRide.status]}</span>
+              <span>{{
+                accepted:    '🚦 Head to pickup location',
+                arrived:     '📍 Waiting for passenger',
+                in_progress: '🛣️ Ride in progress — head to destination',
+              }[activeRide.status] || activeRide.status}</span>
             </div>
 
+            {/* Passenger info */}
             <div className="passenger-pill">
               <div className="passenger-avatar">{activeRide.passenger?.name?.[0]}</div>
               <div>
@@ -141,25 +386,45 @@ function DriverHome() {
               <div className="ride-payout mono">${activeRide.driverPayout}</div>
             </div>
 
+            {/* Map */}
+            {mapTarget.origin && mapTarget.destination && (
+              <RideMapEmbed
+                origin={mapTarget.origin}
+                destination={mapTarget.destination}
+                driverLocation={driverLocation}
+              />
+            )}
+
+            {/* Route text */}
             <div className="ride-route">
               <div className="route-point"><span className="dot dot--green" /><span>{activeRide.origin?.address}</span></div>
               <div className="route-line" />
               <div className="route-point"><span className="dot dot--red" /><span>{activeRide.destination?.address}</span></div>
             </div>
 
-            <div className="ride-actions">
+            {/* Action buttons based on status */}
+            <div className="ride-actions" style={{ display: 'flex', flexDirection: 'column', gap: 10, marginTop: 14 }}>
               {activeRide.status === 'accepted' && (
-                <Button variant="primary" size="lg" className="btn--full" onClick={startRide}>Start ride</Button>
+                <Button variant="primary" size="lg" className="btn--full" onClick={arrivedAtPickup}>
+                  📍 I arrived at pickup
+                </Button>
+              )}
+              {activeRide.status === 'arrived' && (
+                <Button variant="primary" size="lg" className="btn--full" onClick={startRide}>
+                  🚗 Passenger on board — Start ride
+                </Button>
               )}
               {activeRide.status === 'in_progress' && (
-                <Button variant="success" size="lg" className="btn--full" onClick={completeRide}>Complete ride</Button>
+                <Button variant="success" size="lg" className="btn--full" onClick={completeRide}>
+                  ✅ Complete ride
+                </Button>
               )}
             </div>
           </Card>
         </div>
       )}
 
-      {/* Pending requests */}
+      {/* ── Pending requests ── */}
       {isOnline && !activeRide && pendingRides.length > 0 && (
         <div>
           <p className="section-title">Ride requests near you</p>
@@ -196,6 +461,13 @@ function DriverHome() {
           <p>Waiting for ride requests…</p>
         </Card>
       )}
+
+      {!isOnline && (
+        <Card className="waiting-card">
+          <div className="waiting-icon">💤</div>
+          <p>You are offline. Go online to receive rides.</p>
+        </Card>
+      )}
     </div>
   );
 }
@@ -216,16 +488,12 @@ function DriverEarnings() {
 
   return (
     <div className="page">
-      <div className="page-header">
-        <h1 className="page-title">Earnings</h1>
-      </div>
-
+      <div className="page-header"><h1 className="page-title">Earnings</h1></div>
       <div className="stat-grid">
         <Stat label="All-time earnings" value={`$${totalEarnings.toFixed(2)}`} accent />
         <Stat label="Completed rides"   value={history.length} />
         <Stat label="Driver payout"     value="70%" />
       </div>
-
       {loading ? <Spinner size={28} /> : (
         <div className="history-list">
           {history.length === 0 && <p className="empty-state">No completed rides yet</p>}
@@ -322,11 +590,10 @@ export default function DriverDashboard() {
     <AppShell>
       <Routes>
         <Route index element={<DriverHome />} />
-        <Route path="rides" element={<DriverRides />} />
+        <Route path="rides"    element={<DriverRides />} />
         <Route path="earnings" element={<DriverEarnings />} />
-        <Route path="profile" element={<DriverProfile />} />
+        <Route path="profile"  element={<DriverProfile />} />
       </Routes>
     </AppShell>
   );
-  
 }

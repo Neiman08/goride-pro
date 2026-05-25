@@ -1,6 +1,6 @@
 import axios from 'axios';
 
-const BASE = process.env.REACT_APP_API_URL || 'http://localhost:5001/api';
+const BASE = process.env.REACT_APP_API_URL || 'http://localhost:5000/api';
 
 const api = axios.create({ baseURL: BASE, timeout: 10000 });
 
@@ -56,6 +56,7 @@ export const ridesAPI = {
   available:    ()     => api.get('/rides/available'),
   accept:       (id)   => api.post(`/rides/${id}/accept`),
   reject:       (id)   => api.post(`/rides/${id}/reject`),
+  arrived:      (id)   => api.post(`/rides/${id}/arrived`),
   start:        (id)   => api.post(`/rides/${id}/start`),
   complete:     (id)   => api.post(`/rides/${id}/complete`),
   cancel:       (id,r) => api.post(`/rides/${id}/cancel`, { reason: r }),

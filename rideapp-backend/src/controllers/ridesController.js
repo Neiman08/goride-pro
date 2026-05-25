@@ -124,13 +124,36 @@ exports.rejectRide = catchAsync(async (req, res, next) => {
   res.json({ status: 'success', message: 'Ride rejected' });
 });
 
+
+// ── POST /api/rides/:id/arrived ────────────────────────────────────────────
+exports.arrivedAtPickup = catchAsync(async (req, res, next) => {
+  const ride = await Ride.findById(req.params.id);
+  if (!ride) return next(new AppError('Ride not found', 404));
+  if (ride.driver.toString() !== req.user._id.toString())
+    return next(new AppError('Not your ride', 403));
+  if (ride.status !== 'accepted')
+    return next(new AppError('Ride must be accepted first', 400));
+
+  ride.status = 'arrived';
+  await ride.save();
+
+  req.io.to(`user:${ride.passenger}`).emit('ride:driver_arrived', {
+    rideId: ride._id,
+    driverName: req.user.name,
+    vehicleInfo: req.user.vehicleInfo,
+  });
+
+  logger.info(`Driver arrived at pickup for ride ${ride._id}`);
+  res.json({ status: 'success', ride });
+});
+
 // ── POST /api/rides/:id/start ──────────────────────────────────────────────
 exports.startRide = catchAsync(async (req, res, next) => {
   const ride = await Ride.findById(req.params.id);
   if (!ride) return next(new AppError('Ride not found', 404));
   if (ride.driver.toString() !== req.user._id.toString())
     return next(new AppError('Not your ride', 403));
-  if (ride.status !== 'accepted')
+  if (!['accepted', 'arrived'].includes(ride.status))
     return next(new AppError('Ride must be accepted before starting', 400));
 
   ride.status = 'in_progress';

@@ -1,0 +1,162 @@
+.accent { color: var(--accent); }
+
+/* ── Filters ─────────────────────────────────────────────────────────────── */
+.filter-row {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin-bottom: 16px;
+}
+.filter-btn {
+  padding: 6px 14px;
+  border-radius: 20px;
+  font-family: var(--font);
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-3);
+  background: var(--bg-3);
+  border: 1px solid var(--border);
+  cursor: pointer;
+  transition: all 0.15s;
+  text-transform: capitalize;
+}
+.filter-btn.active {
+  background: var(--accent-dim);
+  border-color: var(--accent-border);
+  color: var(--accent);
+}
+
+/* ── Search ──────────────────────────────────────────────────────────────── */
+.search-input {
+  width: 100%;
+  max-width: 400px;
+  padding: 10px 14px;
+  background: var(--bg-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  color: var(--text);
+  font-family: var(--font);
+  font-size: 13px;
+  outline: none;
+  margin-bottom: 16px;
+  transition: border-color 0.15s;
+}
+.search-input:focus { border-color: var(--accent); }
+.search-input::placeholder { color: var(--text-3); }
+
+/* ── Pagination ──────────────────────────────────────────────────────────── */
+.pagination {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  margin-top: 16px;
+  font-size: 13px;
+  color: var(--text-2);
+}
+
+/* ── User cell ───────────────────────────────────────────────────────────── */
+.user-cell { display: flex; align-items: center; gap: 10px; }
+.user-avatar {
+  width: 32px; height: 32px;
+  border-radius: 50%;
+  background: var(--accent);
+  color: #0d0d0d;
+  font-size: 13px;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+.user-avatar--blue { background: var(--blue); color: #fff; }
+.user-name  { font-size: 13px; font-weight: 600; }
+.user-email { font-size: 11px; color: var(--text-3); }
+
+.status-stack { display: flex; flex-direction: column; gap: 4px; }
+
+.action-btns { display: flex; gap: 6px; }
+
+/* ── Tariffs ─────────────────────────────────────────────────────────────── */
+.tariff-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+  gap: 14px;
+}
+
+.tariff-card { display: flex; flex-direction: column; gap: 14px; }
+
+.tariff-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.tariff-icon { font-size: 28px; }
+.tariff-name { font-size: 15px; font-weight: 700; }
+.tariff-desc { font-size: 12px; color: var(--text-3); }
+
+.tariff-rates {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 12px;
+  background: var(--bg-3);
+  border-radius: var(--radius);
+  font-size: 13px;
+}
+.tariff-rates div {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+.tariff-rates span:first-child { color: var(--text-2); }
+
+/* ── Modal ───────────────────────────────────────────────────────────────── */
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,0.7);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 500;
+  backdrop-filter: blur(4px);
+}
+.modal {
+  background: var(--bg-2);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-xl);
+  padding: 32px;
+  width: 100%;
+  max-width: 440px;
+  max-height: 90vh;
+  overflow-y: auto;
+}
+.modal-title { font-size: 18px; font-weight: 700; margin-bottom: 20px; }
+.tariff-fields { display: flex; flex-direction: column; gap: 14px; margin-bottom: 24px; }
+.tariff-field {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: 13px;
+}
+.tariff-field label { color: var(--text-2); flex: 1; }
+.tariff-field input[type="number"],
+.tariff-field input[type="text"] {
+  width: 120px;
+  padding: 7px 10px;
+  background: var(--bg-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  color: var(--text);
+  font-family: var(--mono);
+  font-size: 13px;
+  outline: none;
+  text-align: right;
+}
+.tariff-field input[type="number"]:focus { border-color: var(--accent); }
+.tariff-field input[type="checkbox"] {
+  width: 16px; height: 16px; cursor: pointer;
+  accent-color: var(--accent);
+}
+.modal-actions { display: flex; justify-content: flex-end; gap: 10px; }

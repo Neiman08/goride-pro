@@ -3,6 +3,7 @@ const mongoose = require('mongoose');
 const STATUSES = Object.freeze({
   SEARCHING: 'searching',
   ACCEPTED: 'accepted',
+  ARRIVED: 'arrived',
   IN_PROGRESS: 'in_progress',
   COMPLETED: 'completed',
   CANCELLED: 'cancelled',
@@ -78,6 +79,7 @@ const rideSchema = new mongoose.Schema(
 
     // ── Timestamps ────────────────────────────────────────────────────────
     acceptedAt: Date,
+    arrivedAt: Date,
     startedAt: Date,
     completedAt: Date,
     cancelledAt: Date,
