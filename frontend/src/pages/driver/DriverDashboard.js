@@ -30,92 +30,87 @@ function loadGoogleMaps() {
 }
 
 // ── Embedded map for active ride ───────────────────────────────────────────
-function RideMapEmbed({ origin, destination, driverLocation }) {
+function RideMapEmbed({ originLat, originLng, destLat, destLng, driverLocation }) {
   const mapRef = useRef(null);
   const mapInstance = useRef(null);
   const directionsRenderer = useRef(null);
   const driverMarker = useRef(null);
+  const routeDrawn = useRef(false);
 
+  // Init map ONCE — primitive props prevent unnecessary re-renders
   useEffect(() => {
-    if (!origin || !destination) return;
+    if (!originLat || !destLat) return;
     let mounted = true;
 
     loadGoogleMaps().then((maps) => {
       if (!mounted || !mapRef.current) return;
 
-      // Init map centered on origin
-      mapInstance.current = new maps.Map(mapRef.current, {
-        center: { lat: origin.lat, lng: origin.lng },
-        zoom: 13,
-        disableDefaultUI: true,
-        zoomControl: true,
-        styles: [
-          { elementType: 'geometry', stylers: [{ color: '#111827' }] },
-          { elementType: 'labels.text.fill', stylers: [{ color: '#f9fafb' }] },
-          { elementType: 'labels.text.stroke', stylers: [{ color: '#111827' }] },
-          { featureType: 'road', elementType: 'geometry', stylers: [{ color: '#374151' }] },
-          { featureType: 'water', elementType: 'geometry', stylers: [{ color: '#0f172a' }] },
-          { featureType: 'poi', stylers: [{ visibility: 'off' }] },
-        ],
-      });
+      // Only create map once
+      if (!mapInstance.current) {
+        mapInstance.current = new maps.Map(mapRef.current, {
+          center: { lat: originLat, lng: originLng },
+          zoom: 13,
+          disableDefaultUI: true,
+          zoomControl: true,
+          styles: [
+            { elementType: 'geometry', stylers: [{ color: '#111827' }] },
+            { elementType: 'labels.text.fill', stylers: [{ color: '#f9fafb' }] },
+            { elementType: 'labels.text.stroke', stylers: [{ color: '#111827' }] },
+            { featureType: 'road', elementType: 'geometry', stylers: [{ color: '#374151' }] },
+            { featureType: 'water', elementType: 'geometry', stylers: [{ color: '#0f172a' }] },
+            { featureType: 'poi', stylers: [{ visibility: 'off' }] },
+          ],
+        });
 
-      directionsRenderer.current = new maps.DirectionsRenderer({
-        map: mapInstance.current,
-        suppressMarkers: false,
-        polylineOptions: { strokeColor: '#facc15', strokeWeight: 5 },
-      });
-
-      // Draw route
-      const svc = new maps.DirectionsService();
-      svc.route({
-        origin: new maps.LatLng(origin.lat, origin.lng),
-        destination: new maps.LatLng(destination.lat, destination.lng),
-        travelMode: maps.TravelMode.DRIVING,
-      }, (result, status) => {
-        if (status === 'OK') directionsRenderer.current.setDirections(result);
-      });
-
-      // Driver marker (yellow car)
-      if (driverLocation) {
-        driverMarker.current = new maps.Marker({
-          position: driverLocation,
+        directionsRenderer.current = new maps.DirectionsRenderer({
           map: mapInstance.current,
-          icon: {
-            path: maps.SymbolPath.FORWARD_CLOSED_ARROW,
-            scale: 6,
-            fillColor: '#facc15',
-            fillOpacity: 1,
-            strokeColor: '#fff',
-            strokeWeight: 1.5,
-          },
-          title: 'You',
+          suppressMarkers: false,
+          polylineOptions: { strokeColor: '#facc15', strokeWeight: 5 },
+        });
+      }
+
+      // Only draw route once per origin/dest pair
+      if (!routeDrawn.current) {
+        routeDrawn.current = true;
+        const svc = new maps.DirectionsService();
+        svc.route({
+          origin: new maps.LatLng(originLat, originLng),
+          destination: new maps.LatLng(destLat, destLng),
+          travelMode: maps.TravelMode.DRIVING,
+        }, (result, status) => {
+          if (status === 'OK' && directionsRenderer.current) {
+            directionsRenderer.current.setDirections(result);
+          }
         });
       }
     }).catch(console.error);
 
     return () => { mounted = false; };
-  }, [origin, destination]);
+  }, [originLat, originLng, destLat, destLng]);
 
-  // Update driver marker position live
+  // Update driver marker position — separate effect, no map rebuild
   useEffect(() => {
     if (!driverLocation || !mapInstance.current || !window.google) return;
+    const pos = { lat: driverLocation.lat, lng: driverLocation.lng };
     if (driverMarker.current) {
-      driverMarker.current.setPosition(driverLocation);
+      driverMarker.current.setPosition(pos);
     } else {
       driverMarker.current = new window.google.maps.Marker({
-        position: driverLocation,
+        position: pos,
         map: mapInstance.current,
         icon: {
           path: window.google.maps.SymbolPath.FORWARD_CLOSED_ARROW,
-          scale: 6,
+          scale: 7,
           fillColor: '#facc15',
           fillOpacity: 1,
           strokeColor: '#fff',
-          strokeWeight: 1.5,
+          strokeWeight: 2,
         },
+        title: 'You',
       });
     }
-    mapInstance.current.panTo(driverLocation);
+    // Only pan if driver moved significantly (>50m) to avoid constant jumping
+    mapInstance.current.panTo(pos);
   }, [driverLocation]);
 
   return (
@@ -388,11 +383,42 @@ function DriverHome() {
 
             {/* Map */}
             {mapTarget.origin && mapTarget.destination && (
-              <RideMapEmbed
-                origin={mapTarget.origin}
-                destination={mapTarget.destination}
-                driverLocation={driverLocation}
-              />
+              <>
+                <RideMapEmbed
+                  originLat={mapTarget.origin.lat}
+                  originLng={mapTarget.origin.lng}
+                  destLat={mapTarget.destination.lat}
+                  destLng={mapTarget.destination.lng}
+                  driverLocation={driverLocation}
+                />
+                {/* Open in navigation app */}
+                <div style={{ display: 'flex', gap: 8, marginBottom: 12 }}>
+                  <a
+                    href={`https://www.google.com/maps/dir/?api=1&destination=${mapTarget.destination.lat},${mapTarget.destination.lng}&travelmode=driving`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    style={{
+                      flex: 1, display: 'block', textAlign: 'center',
+                      padding: '10px', borderRadius: 10, fontSize: 13, fontWeight: 600,
+                      background: 'rgba(255,255,255,0.08)', color: '#fff',
+                      textDecoration: 'none', border: '1px solid rgba(255,255,255,0.12)'
+                    }}
+                  >
+                    🗺️ Google Maps
+                  </a>
+                  <a
+                    href={`waze://?ll=${mapTarget.destination.lat},${mapTarget.destination.lng}&navigate=yes`}
+                    style={{
+                      flex: 1, display: 'block', textAlign: 'center',
+                      padding: '10px', borderRadius: 10, fontSize: 13, fontWeight: 600,
+                      background: 'rgba(255,255,255,0.08)', color: '#fff',
+                      textDecoration: 'none', border: '1px solid rgba(255,255,255,0.12)'
+                    }}
+                  >
+                    🔵 Waze
+                  </a>
+                </div>
+              </>
             )}
 
             {/* Route text */}
