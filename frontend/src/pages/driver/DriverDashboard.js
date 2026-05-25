@@ -176,12 +176,9 @@ function DriverHome() {
     }
   }, []);
 
-  // ── Socket setup — runs once, re-attaches if socket reconnects ───────────
-  const attachSocketListeners = useCallback(() => {
-    const socket = getSocket();
-    if (!socket || socketRef.current === socket) return;
-    socketRef.current = socket;
-
+  // ── Socket setup ──────────────────────────────────────────────────────────
+  const registerRideListeners = useCallback((socket) => {
+    // Remove any existing listeners first to avoid duplicates
     socket.off('ride:new_request');
     socket.off('ride:taken');
     socket.off('ride:cancelled');
@@ -190,11 +187,9 @@ function DriverHome() {
       setPendingRides((p) => [ride, ...p.filter((r) => r._id !== ride._id)]);
       showToast('🔔 New ride request!');
     });
-
     socket.on('ride:taken', ({ rideId }) => {
       setPendingRides((p) => p.filter((r) => r._id !== rideId));
     });
-
     socket.on('ride:cancelled', () => {
       showToast('❌ Passenger cancelled');
       setActiveRide(null);
@@ -203,26 +198,63 @@ function DriverHome() {
   }, [showToast]);
 
   useEffect(() => {
-    // Load active ride
+    // Load active ride on mount
     ridesAPI.active()
       .then(({ data }) => setActiveRide(data.ride))
       .finally(() => setLoading(false));
 
-    // Attach listeners immediately and retry every 2s until socket connects
-    attachSocketListeners();
-    const interval = setInterval(attachSocketListeners, 2000);
-
-    // Start GPS
+    // Get initial GPS position
     navigator.geolocation.getCurrentPosition(
       (pos) => setDriverLocation({ lat: pos.coords.latitude, lng: pos.coords.longitude }),
       () => {}
     );
 
-    return () => {
-      clearInterval(interval);
-      stopGPS();
+    // Wait for socket to be available, then attach listeners
+    // Retry every 500ms until socket exists and is connected
+    const setupSocket = () => {
+      const socket = getSocket();
+      if (!socket) return; // still not created
+
+      // Register immediately if already connected
+      if (socket.connected) {
+        registerRideListeners(socket);
+      }
+
+      // Re-register every time socket (re)connects — this is the key fix
+      // If driver's app was open before socket authenticated, this catches it
+      socket.off('connect'); // remove old listener to avoid stacking
+      socket.on('connect', () => {
+        console.log('[Driver] Socket connected — registering ride listeners');
+        registerRideListeners(socket);
+
+        // If driver was online before reconnect, re-announce to server
+        if (isOnline) {
+          navigator.geolocation.getCurrentPosition(
+            (pos) => socket.emit('driver:go_online', { lat: pos.coords.latitude, lng: pos.coords.longitude }),
+            () => {}
+          );
+        }
+      });
+
+      clearInterval(waitInterval);
     };
-  }, [attachSocketListeners, stopGPS]);
+
+    const waitInterval = setInterval(setupSocket, 500);
+    setupSocket(); // try immediately
+
+    return () => {
+      clearInterval(waitInterval);
+      stopGPS();
+      const socket = getSocket();
+      if (socket) {
+        socket.off('connect');
+        socket.off('ride:new_request');
+        socket.off('ride:taken');
+        socket.off('ride:cancelled');
+      }
+    };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [registerRideListeners, stopGPS]);
 
   // ── Go online / offline ───────────────────────────────────────────────────
   const toggleOnline = async () => {
