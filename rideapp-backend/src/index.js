@@ -1,4 +1,5 @@
 require('dotenv').config();
+
 const http = require('http');
 const express = require('express');
 const { Server } = require('socket.io');
@@ -21,14 +22,22 @@ const authRoutes = require('./routes/auth');
 const ridesRoutes = require('./routes/rides');
 const usersRoutes = require('./routes/users');
 const adminRoutes = require('./routes/admin');
+const driverRegistrationRoutes = require('./routes/driverRegistration');
+const adminVerificationRoutes = require('./routes/adminVerification');
 
 // ── App setup ─────────────────────────────────────────────────────────────
 const app = express();
 const server = http.createServer(app);
 
+const FRONTEND_URL = process.env.FRONTEND_URL || 'http://localhost:3000';
+
 // ── Socket.io ─────────────────────────────────────────────────────────────
 const io = new Server(server, {
-  cors: { origin: process.env.FRONTEND_URL || 'http://localhost:3000', methods: ['GET', 'POST'] },
+  cors: {
+    origin: FRONTEND_URL,
+    methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE'],
+    credentials: true,
+  },
   pingTimeout: 60000,
   pingInterval: 25000,
 });
@@ -37,18 +46,24 @@ initSocket(io);
 
 // ── Security middleware ───────────────────────────────────────────────────
 app.use(helmet());
-app.use(cors({ origin: process.env.FRONTEND_URL || 'http://localhost:3000', credentials: true }));
-app.use(mongoSanitize()); // prevent NoSQL injection
+
+app.use(cors({
+  origin: FRONTEND_URL,
+  credentials: true,
+}));
+
+app.use(mongoSanitize());
 app.use(compression());
 
 // Rate limiting
 const limiter = rateLimit({
-  windowMs: parseInt(process.env.RATE_LIMIT_WINDOW_MS) || 15 * 60 * 1000,
-  max: parseInt(process.env.RATE_LIMIT_MAX) || 100,
+  windowMs: parseInt(process.env.RATE_LIMIT_WINDOW_MS, 10) || 15 * 60 * 1000,
+  max: parseInt(process.env.RATE_LIMIT_MAX, 10) || 100,
   message: { status: 'fail', message: 'Too many requests, please try again later.' },
   standardHeaders: true,
   legacyHeaders: false,
 });
+
 app.use('/api', limiter);
 
 // Stricter limit on auth endpoints
@@ -57,23 +72,32 @@ const authLimiter = rateLimit({
   max: 10,
   message: { status: 'fail', message: 'Too many login attempts. Try again in 15 minutes.' },
 });
+
 app.use('/api/auth/login', authLimiter);
 app.use('/api/auth/register', authLimiter);
 
 // ── General middleware ────────────────────────────────────────────────────
-app.use(express.json({ limit: '10kb' })); // cap body size
-app.use(express.urlencoded({ extended: true, limit: '10kb' }));
+// IMPORTANT: verification upload uses files, but normal JSON can stay here.
+app.use(express.json({ limit: '10mb' }));
+app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 
 if (process.env.NODE_ENV === 'development') {
   app.use(morgan('dev'));
 }
 
-// Inject socket.io into every request (used in controllers)
-app.use((req, _res, next) => { req.io = io; next(); });
+// Inject socket.io into every request
+app.use((req, _res, next) => {
+  req.io = io;
+  next();
+});
 
 // ── Health check ──────────────────────────────────────────────────────────
 app.get('/api/health', (_req, res) => {
-  res.json({ status: 'ok', timestamp: new Date(), env: process.env.NODE_ENV });
+  res.json({
+    status: 'ok',
+    timestamp: new Date(),
+    env: process.env.NODE_ENV,
+  });
 });
 
 // ── Routes ────────────────────────────────────────────────────────────────
@@ -81,6 +105,10 @@ app.use('/api/auth', authRoutes);
 app.use('/api/rides', ridesRoutes);
 app.use('/api/users', usersRoutes);
 app.use('/api/admin', adminRoutes);
+
+// New verification routes
+app.use('/api/driver-registration', driverRegistrationRoutes);
+app.use('/api/admin/verification', adminVerificationRoutes);
 
 // ── 404 handler ───────────────────────────────────────────────────────────
 app.all('*', (req, _res, next) => {
@@ -95,17 +123,19 @@ process.on('unhandledRejection', (err) => {
   logger.error('UNHANDLED REJECTION:', { message: err.message, stack: err.stack });
   server.close(() => process.exit(1));
 });
+
 process.on('uncaughtException', (err) => {
   logger.error('UNCAUGHT EXCEPTION:', { message: err.message, stack: err.stack });
   process.exit(1);
 });
 
 // ── Boot ──────────────────────────────────────────────────────────────────
-const PORT = process.env.PORT || 5000;
+const PORT = process.env.PORT || 5001;
 
 connectDB()
   .then(async () => {
     await seedAdmin();
+
     server.listen(PORT, () => {
       logger.info(`🚀 Server running on port ${PORT} [${process.env.NODE_ENV}]`);
     });
